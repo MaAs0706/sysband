@@ -1,6 +1,11 @@
 import { useSyncExternalStore } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import type { DrumId } from '../scene/hitZones'
+import {
+  GUITAR_NOTES,
+  PIANO_NOTES,
+  type InstrumentId,
+} from '../audio/instruments'
 
 export type ConnState =
   | 'offline'
@@ -12,12 +17,22 @@ export type ConnState =
 export interface PlayerInfo {
   id: string
   name: string
+  instrument: InstrumentId
 }
 
 export interface RemoteHit {
   playerId: string
   name: string
   drum: DrumId
+  velocity: number
+  ts: number
+}
+
+export interface RemoteNote {
+  playerId: string
+  name: string
+  instrument: InstrumentId
+  target: string
   velocity: number
   ts: number
 }
@@ -34,6 +49,7 @@ interface NetState {
   roomId: string | null
   you: PlayerInfo | null
   players: PlayerInfo[]
+  instrument: InstrumentId
 }
 
 let state: NetState = {
@@ -41,6 +57,7 @@ let state: NetState = {
   roomId: null,
   you: null,
   players: [],
+  instrument: 'drums',
 }
 
 const listeners = new Set<() => void>()
@@ -59,13 +76,28 @@ export function useNetState(): NetState {
   return useSyncExternalStore(subscribe, () => state)
 }
 
-const DRUM_IDS: DrumId[] = ['kick', 'snare', 'hihat']
+const DRUM_IDS: readonly string[] = ['kick', 'snare', 'hihat']
 const hitListeners = new Set<(hit: RemoteHit) => void>()
+const noteListeners = new Set<(note: RemoteNote) => void>()
 const cursorListeners = new Set<(cursor: RemoteCursor) => void>()
 const seenHits = new Set<string>()
 
 let socket: Socket | null = null
 let desiredRoom: string | null = null
+
+function isValidTarget(inst: InstrumentId, target: string): boolean {
+  if (inst === 'drums') return DRUM_IDS.includes(target)
+  if (inst === 'piano') return (PIANO_NOTES as readonly string[]).includes(target)
+  if (inst === 'guitar') return (GUITAR_NOTES as readonly string[]).includes(target)
+  return false
+}
+
+function dedupe(key: string): boolean {
+  if (seenHits.has(key)) return false
+  seenHits.add(key)
+  if (seenHits.size > 256) seenHits.clear()
+  return true
+}
 
 function ensureSocket(): Socket {
   if (socket) return socket
@@ -73,7 +105,7 @@ function ensureSocket(): Socket {
 
   socket.on('connect', () => {
     set({ conn: 'connected' })
-    if (desiredRoom) void doJoin(desiredRoom)
+    if (desiredRoom) void doJoin(desiredRoom, state.instrument)
   })
   socket.on('disconnect', () => set({ conn: 'disconnected' }))
   socket.io.on('reconnect_attempt', () => set({ conn: 'reconnecting' }))
@@ -82,19 +114,24 @@ function ensureSocket(): Socket {
   socket.on('room-state', (payload: unknown) => {
     const p = payload as { roomId?: string; players?: PlayerInfo[] }
     if (typeof p?.roomId === 'string' && Array.isArray(p.players)) {
-      set({ roomId: p.roomId, players: p.players })
+      const normalized = p.players.map((pl) => ({
+        id: String(pl.id),
+        name: String(pl.name),
+        instrument: (pl.instrument ?? 'drums') as InstrumentId,
+      }))
+      const updatedYou =
+        normalized.find((pl) => pl.id === state.you?.id) ?? state.you
+      set({ roomId: p.roomId, players: normalized, you: updatedYou })
     }
   })
 
   socket.on('drum-hit', (payload: unknown) => {
     const p = payload as Partial<RemoteHit>
-    if (!DRUM_IDS.includes(p.drum as DrumId)) return
+    if (!DRUM_IDS.includes(String(p.drum))) return
     const velocity = Number(p.velocity)
     if (!Number.isFinite(velocity)) return
     const key = `${p.playerId}:${p.ts}:${p.drum}`
-    if (seenHits.has(key)) return
-    seenHits.add(key)
-    if (seenHits.size > 256) seenHits.clear()
+    if (!dedupe(key)) return
     const hit: RemoteHit = {
       playerId: String(p.playerId),
       name: String(p.name ?? 'player'),
@@ -103,6 +140,36 @@ function ensureSocket(): Socket {
       ts: Number(p.ts) || 0,
     }
     hitListeners.forEach((cb) => cb(hit))
+    noteListeners.forEach((cb) =>
+      cb({
+        playerId: hit.playerId,
+        name: hit.name,
+        instrument: 'drums',
+        target: hit.drum,
+        velocity: hit.velocity,
+        ts: hit.ts,
+      }),
+    )
+  })
+
+  socket.on('remote-note', (payload: unknown) => {
+    const p = payload as Partial<RemoteNote>
+    const inst = p.instrument as InstrumentId
+    if (!inst || typeof p.target !== 'string') return
+    if (!isValidTarget(inst, p.target)) return
+    const velocity = Number(p.velocity)
+    if (!Number.isFinite(velocity)) return
+    const key = `${p.playerId}:${p.ts}:${inst}:${p.target}`
+    if (!dedupe(key)) return
+    const ev: RemoteNote = {
+      playerId: String(p.playerId),
+      name: String(p.name ?? 'player'),
+      instrument: inst,
+      target: p.target,
+      velocity: Math.min(1, Math.max(0, velocity)),
+      ts: Number(p.ts) || 0,
+    }
+    noteListeners.forEach((cb) => cb(ev))
   })
 
   socket.on('remote-cursor', (payload: unknown) => {
@@ -127,6 +194,7 @@ function ensureSocket(): Socket {
 
 async function doJoin(
   roomId?: string,
+  instrument: InstrumentId = state.instrument,
 ): Promise<{ ok: boolean; error?: string }> {
   const s = ensureSocket()
   try {
@@ -139,7 +207,7 @@ async function doJoin(
     }
     const res = (await s
       .timeout(5000)
-      .emitWithAck('join', { roomId })) as {
+      .emitWithAck('join', { roomId, instrument })) as {
       ok: boolean
       error?: string
       you?: PlayerInfo
@@ -147,7 +215,13 @@ async function doJoin(
     }
     if (res?.ok && res.you) {
       desiredRoom = res.roomId ?? roomId ?? null
-      set({ you: res.you })
+      set({
+        you: {
+          ...res.you,
+          instrument: res.you.instrument ?? instrument,
+        },
+        instrument: res.you.instrument ?? instrument,
+      })
       return { ok: true }
     }
     desiredRoom = null
@@ -162,11 +236,25 @@ async function doJoin(
 
 export async function joinRoom(
   roomId?: string,
+  instrument: InstrumentId = state.instrument,
 ): Promise<{ ok: boolean; error?: string }> {
-  set({ conn: 'connecting' })
-  const res = await doJoin(roomId)
+  set({ conn: 'connecting', instrument })
+  const res = await doJoin(roomId, instrument)
   if (!res.ok && state.conn === 'connecting') set({ conn: 'disconnected' })
   return res
+}
+
+export function selectInstrument(instrument: InstrumentId): void {
+  set({
+    instrument,
+    you: state.you ? { ...state.you, instrument } : null,
+    players: state.players.map((p) =>
+      p.id === state.you?.id ? { ...p, instrument } : p,
+    ),
+  })
+  if (socket?.connected && state.roomId) {
+    socket.emit('select-instrument', { instrument })
+  }
 }
 
 export function leaveRoom(): void {
@@ -176,20 +264,47 @@ export function leaveRoom(): void {
 }
 
 export function sendHit(drum: DrumId, velocity: number): void {
+  sendNote('drums', drum, velocity)
+}
+
+export function sendNote(
+  instrument: InstrumentId,
+  target: string,
+  velocity: number,
+): void {
   if (!socket?.connected || !state.roomId || !state.you) return
-  socket.emit('hit', {
-    roomId: state.roomId,
-    playerId: state.you.id,
-    drum,
-    velocity,
-    ts: Date.now(),
-  })
+  const ts = Date.now()
+  if (instrument === 'drums') {
+    socket.emit('hit', {
+      roomId: state.roomId,
+      playerId: state.you.id,
+      drum: target,
+      velocity,
+      ts,
+    })
+  } else {
+    socket.emit('note', {
+      roomId: state.roomId,
+      playerId: state.you.id,
+      instrument,
+      target,
+      velocity,
+      ts,
+    })
+  }
 }
 
 export function onRemoteHit(cb: (hit: RemoteHit) => void): () => void {
   hitListeners.add(cb)
   return () => {
     hitListeners.delete(cb)
+  }
+}
+
+export function onRemoteNote(cb: (note: RemoteNote) => void): () => void {
+  noteListeners.add(cb)
+  return () => {
+    noteListeners.delete(cb)
   }
 }
 

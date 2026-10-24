@@ -1,15 +1,10 @@
-import type { DrumId } from '../scene/hitZones'
+import type { InstrumentId } from '../audio/instruments'
 
 export interface HitItem {
   key: number
   name: string
-  drum: DrumId
-}
-
-const LABELS: Record<DrumId, string> = {
-  kick: 'Kick',
-  snare: 'Snare',
-  hihat: 'Hi-hat',
+  instrument: InstrumentId
+  label: string
 }
 
 export default function HitFeed({
@@ -25,10 +20,10 @@ export default function HitFeed({
       {items.map((item) => (
         <div
           key={item.key}
-          className={`hit-item hit-${item.drum}`}
+          className={`hit-item hit-${item.instrument}`}
           onAnimationEnd={() => onExpire(item.key)}
         >
-          {item.name} · {LABELS[item.drum]}
+          {item.name} · {item.label}
         </div>
       ))}
     </div>

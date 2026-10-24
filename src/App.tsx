@@ -2,9 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { HandLandmarker } from '@mediapipe/tasks-vision'
 import { createHandLandmarker, INDEX_FINGERTIP } from './vision/handTracker'
 import { startAudio } from './audio/engine'
-import { triggerHiHat, triggerKick, triggerSnare } from './audio/drums'
+import {
+  triggerInstrument,
+  type InstrumentId,
+} from './audio/instruments'
 import {
   padAt,
+  pianoKeyAt,
   StrikeDetector,
   type DrumId,
 } from './scene/hitZones'
@@ -20,21 +24,15 @@ import RoomBar from './ui/RoomBar'
 import HitFeed, { type HitItem } from './ui/HitFeed'
 import {
   onRemoteCursor,
-  onRemoteHit,
+  onRemoteNote,
   remoteColorFor,
   sendCursor,
-  sendHit,
+  sendNote,
   useNetState,
 } from './net/session'
 import './App.css'
 
 type Status = 'idle' | 'starting' | 'running' | 'error'
-
-const DRUM_TRIGGERS: Record<DrumId, (velocity?: number) => void> = {
-  kick: triggerKick,
-  snare: triggerSnare,
-  hihat: triggerHiHat,
-}
 
 const FINGER_SMOOTHING = 0.55
 
@@ -42,6 +40,14 @@ const DRUM_LABELS: Record<DrumId, string> = {
   kick: 'Kick',
   snare: 'Snare',
   hihat: 'Hi-hat',
+}
+
+function formatTargetLabel(instrument: InstrumentId, target: string): string {
+  if (instrument === 'drums') {
+    return DRUM_LABELS[target as DrumId] ?? target
+  }
+  if (instrument === 'piano') return `Piano ${target}`
+  return `Guitar ${target}`
 }
 
 let hitSeq = 0
@@ -76,6 +82,11 @@ export default function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const sceneRef = useRef<DrumSceneHandle | null>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
+  const instRef = useRef<InstrumentId>(net.instrument)
+  useEffect(() => {
+    instRef.current = net.instrument
+  }, [net.instrument])
+
   const debugRef = useRef<DebugStats>({
     fps: 0,
     hands: 0,
@@ -83,8 +94,14 @@ export default function App() {
     lastVelocity: 0,
   })
 
-  const addHit = (name: string, drum: DrumId) =>
-    setHitFeed((f) => [...f.slice(-3), { key: ++hitSeq, name, drum }])
+  const addHit = useCallback(
+    (name: string, instrument: InstrumentId, label: string) =>
+      setHitFeed((f) => [
+        ...f.slice(-3),
+        { key: ++hitSeq, name, instrument, label },
+      ]),
+    [],
+  )
   const expireHit = (key: number) =>
     setHitFeed((f) => f.filter((h) => h.key !== key))
 
@@ -92,13 +109,13 @@ export default function App() {
 
   useEffect(
     () =>
-      onRemoteHit((hit) => {
+      onRemoteNote((ev) => {
         void startAudio().catch(() => {})
-        DRUM_TRIGGERS[hit.drum](hit.velocity)
-        sceneRef.current?.flash(hit.drum)
-        addHit(hit.name, hit.drum)
+        triggerInstrument(ev.instrument, ev.target, ev.velocity)
+        sceneRef.current?.flashNote(ev.instrument, ev.target, ev.playerId)
+        addHit(ev.name, ev.instrument, formatTargetLabel(ev.instrument, ev.target))
       }),
-    [],
+    [addHit],
   )
 
   const remoteRef = useRef(
@@ -106,7 +123,6 @@ export default function App() {
   )
   useEffect(() => {
     const remote = remoteRef.current
-    const scene = sceneRef.current
     const apply = () => {
       const now = performance.now()
       const list: RemoteFinger[] = []
@@ -118,7 +134,7 @@ export default function App() {
         const colorIdx = remoteColorFor(pid)
         for (const h of c.hands) list.push({ x: h.x, y: h.y, colorIdx })
       }
-      scene?.setRemoteFingers(list)
+      sceneRef.current?.setRemoteFingers(list)
     }
     const off = onRemoteCursor((cursor) => {
       remote.set(cursor.playerId, {
@@ -132,7 +148,7 @@ export default function App() {
       off()
       window.clearInterval(id)
       remote.clear()
-      scene?.setRemoteFingers([])
+      apply()
     }
   }, [])
 
@@ -214,7 +230,7 @@ export default function App() {
           y: number
           prevY: number
           prevT: number
-          insidePad: DrumId | null
+          insideZone: string | null
         }
       >()
 
@@ -234,6 +250,8 @@ export default function App() {
           const result = tracker.detectForVideo(video, now)
           const fingers: Finger[] = []
           const seen = new Set<string>()
+          const activeInst = instRef.current
+
           for (let i = 0; i < result.landmarks.length && i < 2; i++) {
             const tip = result.landmarks[i]?.[INDEX_FINGERTIP]
             if (!tip) continue
@@ -247,28 +265,65 @@ export default function App() {
                 y: tip.y,
                 prevY: tip.y,
                 prevT: now,
-                insidePad: null,
+                insideZone: null,
               }
               handStates.set(key, st)
             }
+            const prevSmoothedY = st.y
             st.x += (1 - tip.x - st.x) * FINGER_SMOOTHING
             st.y += (tip.y - st.y) * FINGER_SMOOTHING
-            const vy = (st.y - st.prevY) / Math.max((now - st.prevT) / 1000, 0.001)
+            const vy =
+              (st.y - st.prevY) / Math.max((now - st.prevT) / 1000, 0.001)
             st.prevY = st.y
             st.prevT = now
             fingers.push({ x: st.x, y: st.y })
-            const pad = padAt(st.x, st.y, aspect)
-            const entered = pad !== null && pad.id !== st.insidePad
-            st.insidePad = pad?.id ?? null
-            const strike = detector.update(pad, entered, vy, now)
-            if (strike) {
-              void startAudio().catch(() => {})
-              DRUM_TRIGGERS[strike.id](strike.velocity)
-              sceneRef.current?.flash(strike.id)
-              sendHit(strike.id, strike.velocity)
-              addHit('You', strike.id)
-              debugRef.current.lastHit = DRUM_LABELS[strike.id]
-              debugRef.current.lastVelocity = vy
+
+            if (activeInst === 'drums') {
+              const pad = padAt(st.x, st.y, aspect)
+              const entered = pad !== null && pad.id !== st.insideZone
+              st.insideZone = pad?.id ?? null
+              const strike = detector.update(pad, entered, vy, now)
+              if (strike) {
+                void startAudio().catch(() => {})
+                triggerInstrument('drums', strike.id, strike.velocity)
+                sceneRef.current?.flashNote('drums', strike.id)
+                sendNote('drums', strike.id, strike.velocity)
+                const label = DRUM_LABELS[strike.id]
+                addHit('You', 'drums', label)
+                debugRef.current.lastHit = label
+                debugRef.current.lastVelocity = vy
+              }
+            } else if (activeInst === 'piano') {
+              const kz = pianoKeyAt(st.x, st.y)
+              const entered = kz !== null && kz.note !== st.insideZone
+              st.insideZone = kz?.note ?? null
+              const noteHit = detector.updatePiano(kz, entered, vy, now)
+              if (noteHit) {
+                void startAudio().catch(() => {})
+                triggerInstrument('piano', noteHit.target, noteHit.velocity)
+                sceneRef.current?.flashNote('piano', noteHit.target)
+                sendNote('piano', noteHit.target, noteHit.velocity)
+                addHit('You', 'piano', noteHit.label)
+                debugRef.current.lastHit = noteHit.label
+                debugRef.current.lastVelocity = vy
+              }
+            } else if (activeInst === 'guitar') {
+              const strum = detector.updateGuitar(
+                prevSmoothedY,
+                st.x,
+                st.y,
+                vy,
+                now,
+              )
+              if (strum) {
+                void startAudio().catch(() => {})
+                triggerInstrument('guitar', strum.target, strum.velocity)
+                sceneRef.current?.flashNote('guitar', strum.target)
+                sendNote('guitar', strum.target, strum.velocity)
+                addHit('You', 'guitar', strum.label)
+                debugRef.current.lastHit = strum.label
+                debugRef.current.lastVelocity = Math.abs(vy)
+              }
             }
           }
           for (const key of handStates.keys()) {
@@ -305,43 +360,51 @@ export default function App() {
           <RoomBar />
 
           <div className="stage" style={{ aspectRatio }}>
-            <video ref={videoRef} playsInline muted autoPlay />
+            <video
+              ref={videoRef}
+              className={status === 'running' ? 'pip' : 'pip hidden'}
+              playsInline
+              muted
+              autoPlay
+            />
             <DrumScene
               ref={sceneRef}
+              players={net.players}
+              youId={net.you?.id ?? null}
+              instrument={net.instrument}
               onError={(message) => {
                 setError(message)
                 setStatus('error')
               }}
             />
 
-            {status !== 'running' && (
-              <div className="stage-overlay">
-                {status === 'idle' && (
-                  <>
-                    <button type="button" className="primary" onClick={start}>
-                      Enable Camera
-                    </button>
-                    <p className="stage-hint">
-                      You can also just listen — remote hits still play.
-                    </p>
-                  </>
-                )}
-                {status === 'starting' && <p className="loading">{step}</p>}
-                {status === 'error' && (
-                  <>
-                    <p className="error">{error}</p>
-                    <button type="button" className="primary" onClick={start}>
-                      Try Again
-                    </button>
-                  </>
-                )}
+            {status === 'idle' && (
+              <div className="cam-cta">
+                <button type="button" className="primary" onClick={start}>
+                  Enable Camera to Play
+                </button>
+              </div>
+            )}
+            {status === 'starting' && (
+              <div className="cam-cta">
+                <p className="loading">{step}</p>
+              </div>
+            )}
+            {status === 'error' && (
+              <div className="cam-cta">
+                <p className="error">{error}</p>
+                <button type="button" className="primary" onClick={start}>
+                  Try Again
+                </button>
               </div>
             )}
 
             {status === 'running' && (
               <div className={`hud ${handVisible ? 'on' : ''}`}>
                 <span className="hud-dot" />
-                {handVisible ? 'tracking fingertip' : 'show your hand'}
+                {handVisible
+                  ? `tracking · ${net.instrument}`
+                  : 'show your hand'}
               </div>
             )}
 
@@ -351,6 +414,13 @@ export default function App() {
               <DebugOverlay source={debugRef} />
             )}
           </div>
+
+          <DrumTestPanel
+            onTrigger={(inst, target, label) => {
+              sceneRef.current?.flashNote(inst, target)
+              addHit('You', inst, label)
+            }}
+          />
 
           <div className="room-controls">
             {status === 'running' && (
@@ -366,8 +436,6 @@ export default function App() {
               {showDebug ? 'hide debug' : 'debug'}
             </button>
           </div>
-
-          {showDebug && <DrumTestPanel />}
         </div>
       )}
     </main>

@@ -112,6 +112,61 @@ try {
 
   let latestState = null
   a.on('room-state', (s) => (latestState = s))
+  b.emit('select-instrument', { instrument: 'piano' })
+  await delay(250)
+  const bState = latestState?.players?.find((p) => p.id === joinResB.you.id)
+  check('B switches instrument to piano', bState?.instrument === 'piano')
+
+  const notesA = []
+  const notesB = []
+  a.on('remote-note', (n) => notesA.push(n))
+  b.on('remote-note', (n) => notesB.push(n))
+  b.emit('note', {
+    roomId: code,
+    playerId: joinResB.you.id,
+    instrument: 'piano',
+    target: 'E4',
+    velocity: 0.75,
+    ts: 700,
+  })
+  await delay(250)
+  check(
+    'piano note relayed to A without echo to B',
+    notesA.length === 1 &&
+      notesA[0].instrument === 'piano' &&
+      notesA[0].target === 'E4' &&
+      notesB.length === 0,
+  )
+
+  b.emit('note', {
+    roomId: code,
+    playerId: joinResB.you.id,
+    instrument: 'piano',
+    target: 'Z9',
+    velocity: 0.8,
+    ts: 701,
+  })
+  await delay(200)
+  check('invalid piano note rejected', notesA.length === 1)
+
+  a.emit('select-instrument', { instrument: 'guitar' })
+  await delay(200)
+  a.emit('note', {
+    roomId: code,
+    playerId: playerA,
+    instrument: 'guitar',
+    target: 'A3',
+    velocity: 0.9,
+    ts: 702,
+  })
+  await delay(250)
+  check(
+    'guitar note relayed to B',
+    notesB.length === 1 &&
+      notesB[0].instrument === 'guitar' &&
+      notesB[0].target === 'A3',
+  )
+
   b.emit('leave')
   await delay(300)
   check('B leave updates room-state', latestState?.players?.length === 1)

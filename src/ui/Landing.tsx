@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { startAudio } from '../audio/engine'
-import { joinRoom, useNetState } from '../net/session'
+import type { InstrumentId } from '../audio/instruments'
+import { joinRoom, selectInstrument, useNetState } from '../net/session'
 
 const STATUS_LABEL: Record<string, string> = {
   offline: 'offline',
@@ -9,6 +10,12 @@ const STATUS_LABEL: Record<string, string> = {
   reconnecting: 'reconnecting…',
   disconnected: 'disconnected',
 }
+
+const INSTRUMENTS: { id: InstrumentId; label: string; desc: string }[] = [
+  { id: 'drums', label: 'Drums', desc: 'Kick, snare & hi-hat kit' },
+  { id: 'piano', label: 'Grand Piano', desc: '8-key melodic octave' },
+  { id: 'guitar', label: 'Electric Guitar', desc: '6-string strum & leads' },
+]
 
 export default function Landing() {
   const net = useNetState()
@@ -19,7 +26,7 @@ export default function Landing() {
   const join = async (roomId?: string) => {
     setBusy(true)
     setError('')
-    const res = await joinRoom(roomId)
+    const res = await joinRoom(roomId, net.instrument)
     setBusy(false)
     if (!res.ok) setError(res.error ?? 'could not join room')
     else void startAudio().catch(() => {})
@@ -29,22 +36,37 @@ export default function Landing() {
     <div className="landing">
       <h1 className="logo">RoomTone</h1>
       <p className="tagline">
-        A virtual drum room. Flick your fingertip down through the glowing
-        pads — play live with friends, right in the browser.
+        A shared 3D virtual music studio. Pick your instrument, step up to your
+        station, and play live with friends using hand gestures.
       </p>
 
       <div className="landing-card">
+        <div className="inst-picker-label">Choose your station</div>
+        <div className="inst-picker">
+          {INSTRUMENTS.map((inst) => (
+            <button
+              key={inst.id}
+              type="button"
+              className={`inst-option ${net.instrument === inst.id ? 'active' : ''}`}
+              onClick={() => selectInstrument(inst.id)}
+            >
+              <span className="inst-title">{inst.label}</span>
+              <span className="inst-desc">{inst.desc}</span>
+            </button>
+          ))}
+        </div>
+
         <button
           type="button"
           className="primary big"
           disabled={busy}
           onClick={() => join()}
         >
-          {busy ? 'Connecting…' : 'Create a room'}
+          {busy ? 'Connecting…' : 'Enter New Studio Room'}
         </button>
         <div className="divider">
           <span />
-          or join with a code
+          or join with a room code
           <span />
         </div>
         <div className="join-row">
@@ -78,8 +100,8 @@ export default function Landing() {
       </div>
 
       <p className="landing-hint">
-        Uses your webcam for hand tracking — decent lighting helps. Video
-        never leaves your device; only fingertip positions are shared.
+        Webcam tracking runs locally in your browser — video never leaves your
+        device.
       </p>
     </div>
   )

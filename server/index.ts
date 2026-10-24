@@ -13,14 +13,33 @@ const io = new Server(http, {
   cors: { origin: ['http://localhost:5173', 'http://127.0.0.1:5173'] },
 })
 
+type InstrumentId = 'drums' | 'piano' | 'guitar'
+
+const INSTRUMENTS = new Set<InstrumentId>(['drums', 'piano', 'guitar'])
 const DRUMS = new Set(['kick', 'snare', 'hihat'])
+const PIANO_NOTES = new Set(['C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4', 'C5'])
+const GUITAR_NOTES = new Set([
+  'E2',
+  'A2',
+  'D3',
+  'G3',
+  'B3',
+  'E4',
+  'A3',
+  'D4',
+  'G4',
+  'B4',
+  'E5',
+])
+
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
-const MIN_HIT_INTERVAL_MS = 30
+const MIN_HIT_INTERVAL_MS = 25
 const MIN_CURSOR_INTERVAL_MS = 40
 
 interface Player {
   id: string
   name: string
+  instrument: InstrumentId
 }
 
 interface Room {
@@ -44,8 +63,19 @@ const stateOf = (room: Room) => ({
   players: [...room.players.values()],
 })
 
+function isValidTarget(instrument: InstrumentId, target: string): boolean {
+  if (instrument === 'drums') return DRUMS.has(target)
+  if (instrument === 'piano') return PIANO_NOTES.has(target)
+  if (instrument === 'guitar') return GUITAR_NOTES.has(target)
+  return false
+}
+
 io.on('connection', (socket: Socket) => {
-  const player: Player = { id: socket.id, name: `Player-${++nameSeq}` }
+  const player: Player = {
+    id: socket.id,
+    name: `Player-${++nameSeq}`,
+    instrument: 'drums',
+  }
   let room: Room | null = null
   let lastHitAt = 0
   let lastCursorAt = 0
@@ -66,10 +96,15 @@ io.on('connection', (socket: Socket) => {
         : () => undefined
     if (room) leave()
 
+    const p = (payload ?? {}) as { roomId?: unknown; instrument?: unknown }
     const code =
-      typeof (payload as { roomId?: unknown })?.roomId === 'string'
-        ? (payload as { roomId: string }).roomId.trim().toUpperCase()
-        : ''
+      typeof p.roomId === 'string' ? p.roomId.trim().toUpperCase() : ''
+    if (
+      typeof p.instrument === 'string' &&
+      INSTRUMENTS.has(p.instrument as InstrumentId)
+    ) {
+      player.instrument = p.instrument as InstrumentId
+    }
 
     let target: Room
     if (code) {
@@ -89,6 +124,21 @@ io.on('connection', (socket: Socket) => {
     io.to(room.code).emit('room-state', stateOf(room))
   })
 
+  socket.on('select-instrument', (payload: unknown) => {
+    const inst = (payload as { instrument?: unknown } | null)?.instrument
+    if (
+      typeof inst !== 'string' ||
+      !INSTRUMENTS.has(inst as InstrumentId)
+    ) {
+      return
+    }
+    player.instrument = inst as InstrumentId
+    if (room) {
+      room.players.set(player.id, { ...player })
+      io.to(room.code).emit('room-state', stateOf(room))
+    }
+  })
+
   socket.on('leave', leave)
 
   socket.on('hit', (payload: unknown) => {
@@ -102,12 +152,39 @@ io.on('connection', (socket: Socket) => {
     const now = Date.now()
     if (now - lastHitAt < MIN_HIT_INTERVAL_MS) return
     lastHitAt = now
+    const clamped = Math.min(1, Math.max(0, velocity))
+    const ts = Number.isFinite(p.ts) ? Number(p.ts) : now
     socket.to(room.code).emit('drum-hit', {
       playerId: player.id,
       name: player.name,
       drum: p.drum,
-      velocity: Math.min(1, Math.max(0, velocity)),
-      ts: Number.isFinite(p.ts) ? Number(p.ts) : now,
+      velocity: clamped,
+      ts,
+    })
+  })
+
+  socket.on('note', (payload: unknown) => {
+    const p = payload as Record<string, unknown> | null
+    if (!room || !p || typeof p !== 'object') return
+    if (p.roomId !== room.code) return
+    if (p.playerId !== player.id) return
+    const inst = p.instrument as InstrumentId
+    if (typeof inst !== 'string' || !INSTRUMENTS.has(inst)) return
+    if (typeof p.target !== 'string' || !isValidTarget(inst, p.target)) return
+    const velocity = Number(p.velocity)
+    if (!Number.isFinite(velocity)) return
+    const now = Date.now()
+    if (now - lastHitAt < MIN_HIT_INTERVAL_MS) return
+    lastHitAt = now
+    const clamped = Math.min(1, Math.max(0, velocity))
+    const ts = Number.isFinite(p.ts) ? Number(p.ts) : now
+    socket.to(room.code).emit('remote-note', {
+      playerId: player.id,
+      name: player.name,
+      instrument: inst,
+      target: p.target,
+      velocity: clamped,
+      ts,
     })
   })
 
