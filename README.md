@@ -1,32 +1,53 @@
-# React + TypeScript + Vite
+# RoomTone
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Multiplayer virtual drum kit — webcam-tracked fingertip strikes play
+synthesized drums, relayed over Socket.IO rooms so everyone in a room
+hears each hit.
 
-Currently, two official plugins are available:
+## Run locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Two processes, two terminals:
 
-## React Compiler
+```bash
+npm install
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+# terminal 1 — relay server on :3001
+npm run server
 
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+# terminal 2 — Vite dev client on :5173
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Open `http://localhost:5173`, click **Enable Camera**, then in the Room
+panel **Create room** (or enter a 4-letter code and **Join**). A second
+browser/device joins with the same code; drum hits made by any player
+play on every client in that room. The Vite dev server proxies
+`/socket.io` to `:3001`, so no extra client config is needed.
+
+Flick an index fingertip downward through a ring to strike.
+Hovering inside a pad stays silent; hits need downward velocity.
+
+## Scripts
+
+| Command | Purpose |
+|---|---|
+| `npm run dev` | Vite dev client |
+| `npm run server` | Socket.IO room server (tsx watch) |
+| `npm run build` | typecheck + production build |
+| `npm run lint` | oxlint |
+| `npm run typecheck:server` | tsc over `server/` |
+| `npm run test:server` | smoke test: relay, isolation, validation, room GC |
+
+## Tuning
+
+- Strike thresholds live in `STRIKE` (`src/scene/hitZones.ts`):
+  `strikeVelocity` (flick inside a pad), `entryVelocity` (crossing in),
+  `cooldownMs`, `minGain`.
+- `FINGER_SMOOTHING` (`src/App.tsx`) controls fingertip EMA smoothing.
+
+## Limitations (for now)
+
+- In-memory rooms; no persistence, auth, or reconnection to a stale
+  player identity (rejoins get a fresh `Player-N` name).
+- LAN/local dev only — the server binds localhost; deploy + TURN/TLS
+  would come later.

@@ -202,3 +202,145 @@ button.pad {
     padding-left: 8px;
   }
 }
+
+.room-panel {
+  text-align: center;
+
+  h2 {
+    margin: 0 0 12px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+}
+
+.conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #6b7280;
+
+  .conn-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #4b5563;
+  }
+
+  &.conn-connected .conn-dot {
+    background: #34d399;
+  }
+
+  &.conn-connecting .conn-dot,
+  &.conn-reconnecting .conn-dot {
+    background: #fbbf24;
+  }
+
+  &.conn-disconnected .conn-dot {
+    background: #f87171;
+  }
+}
+
+.room-join {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+
+  .room-or {
+    font-size: 13px;
+    color: #6b7280;
+  }
+
+  .error {
+    width: 100%;
+    margin-top: 4px;
+  }
+}
+
+.room-input {
+  font: inherit;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 15px;
+  text-align: center;
+  width: 84px;
+  color: #e5e7eb;
+  background: #16171d;
+  border: 1px solid #2e303a;
+  border-radius: 8px;
+  padding: 8px 10px;
+  text-transform: uppercase;
+  outline: none;
+
+  &:focus {
+    border-color: #7c3aed;
+  }
+
+  &::placeholder {
+    color: #4b5563;
+  }
+}
+
+.room-active {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.room-code {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 6px;
+  color: #d8b4fe;
+  padding-left: 6px;
+}
+
+.room-players {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.player-chip {
+  font-size: 12px;
+  color: #9ca3af;
+  background: #16171d;
+  border: 1px solid #2e303a;
+  border-radius: 999px;
+  padding: 4px 12px;
+
+  &.you {
+    color: #d8b4fe;
+    border-color: rgba(192, 132, 252, 0.4);
+  }
+}
+
+.debug {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  display: flex;
+  gap: 10px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  color: #6b7280;
+  background: rgba(14, 15, 20, 0.75);
+  border: 1px solid #26272f;
+  border-radius: 999px;
+  padding: 4px 12px;
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+}

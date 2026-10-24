@@ -14,8 +14,17 @@ export interface Finger {
 
 export interface DrumSceneHandle {
   setFingers(fingers: Finger[]): void
+  setRemoteFingers(fingers: RemoteFinger[]): void
   flash(id: DrumId): void
 }
+
+export interface RemoteFinger {
+  x: number
+  y: number
+  colorIdx: number
+}
+
+const REMOTE_COLORS = [0xfbbf24, 0x34d399, 0x60a5fa, 0xf472b6]
 
 interface DrumSceneProps {
   onError?: (message: string) => void
@@ -34,6 +43,8 @@ const DrumScene = forwardRef<DrumSceneHandle, DrumSceneProps>(
       ref,
       () => ({
         setFingers: (fingers) => apiRef.current?.setFingers(fingers),
+        setRemoteFingers: (fingers) =>
+          apiRef.current?.setRemoteFingers(fingers),
         flash: (id) => apiRef.current?.flash(id),
       }),
       [],
@@ -102,6 +113,21 @@ const DrumScene = forwardRef<DrumSceneHandle, DrumSceneProps>(
         return orb
       })
 
+      const remoteOrbs = Array.from({ length: 8 }, () => {
+        const orb = new THREE.Mesh(
+          new THREE.CircleGeometry(1, 32),
+          new THREE.MeshBasicMaterial({
+            transparent: true,
+            opacity: 0.75,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+          }),
+        )
+        orb.visible = false
+        scene.add(orb)
+        return orb
+      })
+
       let aspect = 1
       const layout = () => {
         const w = mount.clientWidth
@@ -114,6 +140,8 @@ const DrumScene = forwardRef<DrumSceneHandle, DrumSceneProps>(
           p.group.scale.set((p.pad.r / aspect) * s, p.pad.r * s, 1)
         }
         for (const orb of orbs) orb.scale.set(0.026 / aspect, 0.026, 1)
+        for (const orb of remoteOrbs)
+          orb.scale.set(0.021 / aspect, 0.021, 1)
       }
       layout()
       const observer = new ResizeObserver(layout)
@@ -125,12 +153,13 @@ const DrumScene = forwardRef<DrumSceneHandle, DrumSceneProps>(
         const dt = Math.min((now - last) / 1000, 0.05)
         last = now
         for (const p of padMeshes) {
-          p.flash = Math.max(0, p.flash - dt * 4)
+          p.flash *= Math.exp(-dt * 5.5)
+          if (p.flash < 0.001) p.flash = 0
           ;(p.disc.material as THREE.MeshBasicMaterial).opacity =
-            0.12 + p.flash * 0.5
+            0.12 + p.flash * 0.55
           ;(p.ring.material as THREE.MeshBasicMaterial).opacity =
             0.75 + p.flash * 0.25
-          const s = 1 + p.flash * 0.18
+          const s = 1 + p.flash * 0.22
           p.group.scale.set((p.pad.r / aspect) * s, p.pad.r * s, 1)
         }
         renderer.render(scene, camera)
@@ -144,6 +173,18 @@ const DrumScene = forwardRef<DrumSceneHandle, DrumSceneProps>(
             const finger = fingers[i]
             orb.visible = Boolean(finger)
             if (finger) orb.position.set(finger.x, 1 - finger.y, 0.5)
+          })
+        },
+        setRemoteFingers(fingers) {
+          remoteOrbs.forEach((orb, i) => {
+            const finger = fingers[i]
+            orb.visible = Boolean(finger)
+            if (finger) {
+              orb.position.set(finger.x, 1 - finger.y, 0.4)
+              ;(orb.material as THREE.MeshBasicMaterial).color.setHex(
+                REMOTE_COLORS[finger.colorIdx % REMOTE_COLORS.length],
+              )
+            }
           })
         },
         flash(id) {

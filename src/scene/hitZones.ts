@@ -28,27 +28,42 @@ export function padAt(
   return null
 }
 
+export const STRIKE = {
+  strikeVelocity: 0.55,
+  entryVelocity: 0.3,
+  cooldownMs: 220,
+  minGain: 0.25,
+} as const
+
 export interface Strike {
   id: DrumId
-  strength: number
+  velocity: number
 }
 
 export class StrikeDetector {
   private lastHitAt = new Map<DrumId, number>()
-  private velocityThreshold: number
-  private cooldownMs: number
+  private strikeVelocity = STRIKE.strikeVelocity
+  private entryVelocity = STRIKE.entryVelocity
+  private cooldownMs = STRIKE.cooldownMs
 
-  constructor(velocityThreshold = 0.6, cooldownMs = 200) {
-    this.velocityThreshold = velocityThreshold
-    this.cooldownMs = cooldownMs
+  constructor(overrides: Partial<typeof STRIKE> = {}) {
+    Object.assign(this, overrides)
   }
 
-  update(pad: DrumPad | null, vy: number, now: number): Strike | null {
-    if (!pad || vy < this.velocityThreshold) return null
+  update(
+    pad: DrumPad | null,
+    enteredZone: boolean,
+    vy: number,
+    now: number,
+  ): Strike | null {
+    if (!pad) return null
+    const threshold = enteredZone ? this.entryVelocity : this.strikeVelocity
+    if (vy < threshold) return null
     const last = this.lastHitAt.get(pad.id) ?? -Infinity
     if (now - last < this.cooldownMs) return null
     this.lastHitAt.set(pad.id, now)
-    return { id: pad.id, strength: Math.min(1, 0.4 + vy / 3) }
+    const velocity = Math.min(1, Math.max(STRIKE.minGain, STRIKE.minGain + vy / 4))
+    return { id: pad.id, velocity }
   }
 
   reset(): void {

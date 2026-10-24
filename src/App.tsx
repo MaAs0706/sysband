@@ -11,8 +11,18 @@ import {
 import DrumScene, {
   type DrumSceneHandle,
   type Finger,
+  type RemoteFinger,
 } from './scene/DrumScene'
 import DrumTestPanel from './ui/DrumTestPanel'
+import DebugOverlay, { type DebugStats } from './ui/DebugOverlay'
+import RoomPanel from './ui/RoomPanel'
+import {
+  onRemoteCursor,
+  onRemoteHit,
+  remoteColorFor,
+  sendCursor,
+  sendHit,
+} from './net/session'
 import './App.css'
 
 type Status = 'idle' | 'starting' | 'running' | 'error'
@@ -58,8 +68,59 @@ export default function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const sceneRef = useRef<DrumSceneHandle | null>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
+  const debugRef = useRef<DebugStats>({
+    fps: 0,
+    hands: 0,
+    lastHit: '',
+    lastVelocity: 0,
+  })
 
   useEffect(() => () => cleanupRef.current?.(), [])
+
+  useEffect(
+    () =>
+      onRemoteHit((hit) => {
+        void startAudio().catch(() => {})
+        DRUM_TRIGGERS[hit.drum](hit.velocity)
+        sceneRef.current?.flash(hit.drum)
+      }),
+    [],
+  )
+
+  const remoteRef = useRef(
+    new Map<string, { hands: { x: number; y: number }[]; at: number }>(),
+  )
+  useEffect(() => {
+    const remote = remoteRef.current
+    const scene = sceneRef.current
+    const apply = () => {
+      const now = performance.now()
+      const list: RemoteFinger[] = []
+      for (const [pid, c] of remote) {
+        if (now - c.at > 600) {
+          remote.delete(pid)
+          continue
+        }
+        const colorIdx = remoteColorFor(pid)
+        for (const h of c.hands) list.push({ x: h.x, y: h.y, colorIdx })
+      }
+      scene?.setRemoteFingers(list)
+    }
+    const off = onRemoteCursor((cursor) => {
+      remote.set(cursor.playerId, {
+        hands: cursor.hands,
+        at: performance.now(),
+      })
+      apply()
+    })
+    const id = window.setInterval(apply, 250)
+    return () => {
+      off()
+      window.clearInterval(id)
+      remote.clear()
+      scene?.setRemoteFingers([])
+    }
+  }, [])
 
   const stop = useCallback(() => {
     cleanupRef.current?.()
@@ -120,20 +181,36 @@ export default function App() {
       const aspect = video.videoWidth / video.videoHeight
       setAspectRatio(`${video.videoWidth} / ${video.videoHeight}`)
 
+      stream.getTracks().forEach((track) =>
+        track.addEventListener('ended', stop),
+      )
+
       const tracker = landmarker
       const detector = new StrikeDetector()
       const handStates = new Map<
         string,
-        { x: number; y: number; prevY: number; prevT: number }
+        {
+          x: number
+          y: number
+          prevY: number
+          prevT: number
+          insidePad: DrumId | null
+        }
       >()
 
       let lastTime = -1
       let lastVisible = false
+      let lastFrameAt = 0
+      let fps = 0
       const tick = () => {
         if (disposed) return
         if (video.readyState >= 2 && video.currentTime !== lastTime) {
           lastTime = video.currentTime
           const now = performance.now()
+          if (lastFrameAt) {
+            fps += (1000 / Math.max(now - lastFrameAt, 1) - fps) * 0.1
+          }
+          lastFrameAt = now
           const result = tracker.detectForVideo(video, now)
           const fingers: Finger[] = []
           const seen = new Set<string>()
@@ -145,7 +222,13 @@ export default function App() {
             seen.add(key)
             let st = handStates.get(key)
             if (!st) {
-              st = { x: 1 - tip.x, y: tip.y, prevY: tip.y, prevT: now }
+              st = {
+                x: 1 - tip.x,
+                y: tip.y,
+                prevY: tip.y,
+                prevT: now,
+                insidePad: null,
+              }
               handStates.set(key, st)
             }
             st.x += (1 - tip.x - st.x) * FINGER_SMOOTHING
@@ -154,23 +237,32 @@ export default function App() {
             st.prevY = st.y
             st.prevT = now
             fingers.push({ x: st.x, y: st.y })
-            const strike = detector.update(padAt(st.x, st.y, aspect), vy, now)
+            const pad = padAt(st.x, st.y, aspect)
+            const entered = pad !== null && pad.id !== st.insidePad
+            st.insidePad = pad?.id ?? null
+            const strike = detector.update(pad, entered, vy, now)
             if (strike) {
               void startAudio().catch(() => {})
-              DRUM_TRIGGERS[strike.id](strike.strength)
+              DRUM_TRIGGERS[strike.id](strike.velocity)
               sceneRef.current?.flash(strike.id)
+              sendHit(strike.id, strike.velocity)
               setLastHit(DRUM_LABELS[strike.id])
+              debugRef.current.lastHit = DRUM_LABELS[strike.id]
+              debugRef.current.lastVelocity = vy
             }
           }
           for (const key of handStates.keys()) {
             if (!seen.has(key)) handStates.delete(key)
           }
+          debugRef.current.fps = fps
+          debugRef.current.hands = fingers.length
           const visible = fingers.length > 0
           if (visible !== lastVisible) {
             lastVisible = visible
             setHandVisible(visible)
           }
           sceneRef.current?.setFingers(fingers)
+          sendCursor(fingers)
         }
         rafId = requestAnimationFrame(tick)
       }
@@ -227,6 +319,8 @@ export default function App() {
             {lastHit && <span className="hud-last">last: {lastHit}</span>}
           </div>
         )}
+
+        {status === 'running' && <DebugOverlay source={debugRef} />}
       </div>
 
       {status === 'running' && (
@@ -236,6 +330,8 @@ export default function App() {
       )}
 
       <DrumTestPanel />
+
+      <RoomPanel />
     </main>
   )
 }
