@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { startAudio } from '../audio/engine'
 import { joinRoom, useNetState } from '../net/session'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -21,6 +22,7 @@ export default function Landing() {
     const res = await joinRoom(roomId)
     setBusy(false)
     if (!res.ok) setError(res.error ?? 'could not join room')
+    else void startAudio().catch(() => {})
   }
 
   return (

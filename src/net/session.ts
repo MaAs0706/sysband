@@ -148,9 +148,14 @@ async function doJoin(
     if (res?.ok && res.you) {
       desiredRoom = res.roomId ?? roomId ?? null
       set({ you: res.you })
+      return { ok: true }
     }
-    return res?.ok ? { ok: true } : { ok: false, error: res?.error ?? 'failed' }
+    desiredRoom = null
+    set({ roomId: null, you: null, players: [] })
+    return { ok: false, error: res?.error ?? 'failed' }
   } catch {
+    desiredRoom = null
+    set({ roomId: null, you: null, players: [] })
     return { ok: false, error: 'server unreachable' }
   }
 }
