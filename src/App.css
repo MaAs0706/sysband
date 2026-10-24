@@ -108,6 +108,58 @@ button.secondary {
   margin: 0;
 }
 
+.drum-panel {
+  text-align: center;
+
+  h2 {
+    margin: 0 0 12px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+  }
+
+  .error {
+    margin-top: 12px;
+  }
+}
+
+.pads {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+button.pad {
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  color: #e5e7eb;
+  background: #16171d;
+  border: 1px solid #2e303a;
+  border-radius: 10px;
+  padding: 14px 28px;
+  cursor: pointer;
+  transition:
+    transform 0.05s,
+    background 0.1s,
+    border-color 0.1s,
+    color 0.1s;
+
+  &:hover {
+    border-color: #4b5563;
+  }
+
+  &:active,
+  &.pressed {
+    background: rgba(192, 132, 252, 0.18);
+    border-color: #c084fc;
+    color: #d8b4fe;
+    transform: scale(0.97);
+  }
+}
+
 .hud {
   position: absolute;
   top: 12px;

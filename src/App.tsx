@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { HandLandmarker } from '@mediapipe/tasks-vision'
 import { createHandLandmarker, INDEX_FINGERTIP } from './vision/handTracker'
+import DrumTestPanel from './ui/DrumTestPanel'
 import './App.css'
 
 type Status = 'idle' | 'starting' | 'running' | 'error'
@@ -180,6 +181,8 @@ export default function App() {
           Disable camera
         </button>
       )}
+
+      <DrumTestPanel />
     </main>
   )
 }
