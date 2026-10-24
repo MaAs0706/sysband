@@ -1,10 +1,35 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { HandLandmarker } from '@mediapipe/tasks-vision'
 import { createHandLandmarker, INDEX_FINGERTIP } from './vision/handTracker'
+import { startAudio } from './audio/engine'
+import { triggerHiHat, triggerKick, triggerSnare } from './audio/drums'
+import {
+  padAt,
+  StrikeDetector,
+  type DrumId,
+} from './scene/hitZones'
+import DrumScene, {
+  type DrumSceneHandle,
+  type Finger,
+} from './scene/DrumScene'
 import DrumTestPanel from './ui/DrumTestPanel'
 import './App.css'
 
 type Status = 'idle' | 'starting' | 'running' | 'error'
+
+const DRUM_TRIGGERS: Record<DrumId, (velocity?: number) => void> = {
+  kick: triggerKick,
+  snare: triggerSnare,
+  hihat: triggerHiHat,
+}
+
+const FINGER_SMOOTHING = 0.55
+
+const DRUM_LABELS: Record<DrumId, string> = {
+  kick: 'Kick',
+  snare: 'Snare',
+  hihat: 'Hi-hat',
+}
 
 function describeError(err: unknown): string {
   if (err instanceof DOMException) {
@@ -28,9 +53,10 @@ export default function App() {
   const [error, setError] = useState('')
   const [step, setStep] = useState('')
   const [handVisible, setHandVisible] = useState(false)
+  const [lastHit, setLastHit] = useState('')
   const [aspectRatio, setAspectRatio] = useState('16 / 9')
   const videoRef = useRef<HTMLVideoElement | null>(null)
-  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const sceneRef = useRef<DrumSceneHandle | null>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
 
   useEffect(() => () => cleanupRef.current?.(), [])
@@ -38,14 +64,14 @@ export default function App() {
   const stop = useCallback(() => {
     cleanupRef.current?.()
     cleanupRef.current = null
+    sceneRef.current?.setFingers([])
     setHandVisible(false)
     setStatus('idle')
   }, [])
 
   const start = async () => {
     const video = videoRef.current
-    const canvas = canvasRef.current
-    if (!video || !canvas) return
+    if (!video) return
 
     if (!navigator.mediaDevices?.getUserMedia) {
       setError('Camera access needs a secure context — use localhost or HTTPS.')
@@ -55,6 +81,7 @@ export default function App() {
 
     setError('')
     setStatus('starting')
+    void startAudio().catch(() => {})
 
     let disposed = false
     let rafId = 0
@@ -68,6 +95,7 @@ export default function App() {
       landmarker?.close()
       const v = videoRef.current
       if (v) v.srcObject = null
+      sceneRef.current?.setFingers([])
     }
 
     try {
@@ -89,13 +117,15 @@ export default function App() {
       landmarker = await createHandLandmarker()
       if (disposed) return
 
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
+      const aspect = video.videoWidth / video.videoHeight
       setAspectRatio(`${video.videoWidth} / ${video.videoHeight}`)
 
       const tracker = landmarker
-      const ctx = canvas.getContext('2d')
-      if (!ctx) throw new Error('Canvas 2D context unavailable')
+      const detector = new StrikeDetector()
+      const handStates = new Map<
+        string,
+        { x: number; y: number; prevY: number; prevT: number }
+      >()
 
       let lastTime = -1
       let lastVisible = false
@@ -103,28 +133,44 @@ export default function App() {
         if (disposed) return
         if (video.readyState >= 2 && video.currentTime !== lastTime) {
           lastTime = video.currentTime
-          const result = tracker.detectForVideo(video, performance.now())
-          const tip = result.landmarks[0]?.[INDEX_FINGERTIP]
-          const visible = Boolean(tip)
+          const now = performance.now()
+          const result = tracker.detectForVideo(video, now)
+          const fingers: Finger[] = []
+          const seen = new Set<string>()
+          for (let i = 0; i < result.landmarks.length && i < 2; i++) {
+            const tip = result.landmarks[i]?.[INDEX_FINGERTIP]
+            if (!tip) continue
+            const key =
+              result.handedness[i]?.[0]?.categoryName ?? `hand${i}`
+            seen.add(key)
+            let st = handStates.get(key)
+            if (!st) {
+              st = { x: 1 - tip.x, y: tip.y, prevY: tip.y, prevT: now }
+              handStates.set(key, st)
+            }
+            st.x += (1 - tip.x - st.x) * FINGER_SMOOTHING
+            st.y += (tip.y - st.y) * FINGER_SMOOTHING
+            const vy = (st.y - st.prevY) / Math.max((now - st.prevT) / 1000, 0.001)
+            st.prevY = st.y
+            st.prevT = now
+            fingers.push({ x: st.x, y: st.y })
+            const strike = detector.update(padAt(st.x, st.y, aspect), vy, now)
+            if (strike) {
+              void startAudio().catch(() => {})
+              DRUM_TRIGGERS[strike.id](strike.strength)
+              sceneRef.current?.flash(strike.id)
+              setLastHit(DRUM_LABELS[strike.id])
+            }
+          }
+          for (const key of handStates.keys()) {
+            if (!seen.has(key)) handStates.delete(key)
+          }
+          const visible = fingers.length > 0
           if (visible !== lastVisible) {
             lastVisible = visible
             setHandVisible(visible)
           }
-          ctx.clearRect(0, 0, canvas.width, canvas.height)
-          if (tip) {
-            const x = (1 - tip.x) * canvas.width
-            const y = tip.y * canvas.height
-            ctx.beginPath()
-            ctx.arc(x, y, 14, 0, Math.PI * 2)
-            ctx.shadowColor = 'rgba(192, 132, 252, 0.9)'
-            ctx.shadowBlur = 18
-            ctx.fillStyle = 'rgba(192, 132, 252, 0.85)'
-            ctx.fill()
-            ctx.shadowBlur = 0
-            ctx.lineWidth = 3
-            ctx.strokeStyle = '#ffffff'
-            ctx.stroke()
-          }
+          sceneRef.current?.setFingers(fingers)
         }
         rafId = requestAnimationFrame(tick)
       }
@@ -142,12 +188,18 @@ export default function App() {
     <main className="app">
       <header className="header">
         <h1>RoomTone</h1>
-        <p>Hand tracking test — index fingertip</p>
+        <p>Virtual drum kit — strike downward through a pad</p>
       </header>
 
       <div className="stage" style={{ aspectRatio }}>
         <video ref={videoRef} playsInline muted autoPlay />
-        <canvas ref={canvasRef} />
+        <DrumScene
+          ref={sceneRef}
+          onError={(message) => {
+            setError(message)
+            setStatus('error')
+          }}
+        />
 
         {status !== 'running' && (
           <div className="stage-overlay">
@@ -172,6 +224,7 @@ export default function App() {
           <div className={`hud ${handVisible ? 'on' : ''}`}>
             <span className="hud-dot" />
             {handVisible ? 'tracking fingertip' : 'show your hand'}
+            {lastHit && <span className="hud-last">last: {lastHit}</span>}
           </div>
         )}
       </div>

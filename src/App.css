@@ -37,7 +37,7 @@
   overflow: hidden;
 
   video,
-  canvas {
+  .drum-scene {
     position: absolute;
     inset: 0;
     width: 100%;
@@ -47,6 +47,10 @@
   video {
     transform: scaleX(-1);
     object-fit: fill;
+  }
+
+  .drum-scene canvas {
+    display: block;
   }
 }
 
@@ -190,5 +194,11 @@ button.pad {
       background: #c084fc;
       box-shadow: 0 0 8px #c084fc;
     }
+  }
+
+  .hud-last {
+    color: #6b7280;
+    border-left: 1px solid #2e303a;
+    padding-left: 8px;
   }
 }

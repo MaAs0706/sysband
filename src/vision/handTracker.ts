@@ -17,7 +17,7 @@ export async function createHandLandmarker(): Promise<HandLandmarker> {
   const options: HandLandmarkerOptions = {
     baseOptions: { modelAssetPath: MODEL_URL },
     runningMode: 'VIDEO',
-    numHands: 1,
+    numHands: 2,
   }
 
   try {
