@@ -212,8 +212,10 @@ export function onRemoteCursor(
   }
 }
 
+export const PLAYER_COLORS = ['#fbbf24', '#34d399', '#60a5fa', '#f472b6']
+
 export function remoteColorFor(playerId: string): number {
   let hash = 0
   for (let i = 0; i < playerId.length; i++) hash += playerId.charCodeAt(i)
-  return hash % 4
+  return hash % PLAYER_COLORS.length
 }

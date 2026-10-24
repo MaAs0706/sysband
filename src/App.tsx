@@ -15,13 +15,16 @@ import DrumScene, {
 } from './scene/DrumScene'
 import DrumTestPanel from './ui/DrumTestPanel'
 import DebugOverlay, { type DebugStats } from './ui/DebugOverlay'
-import RoomPanel from './ui/RoomPanel'
+import Landing from './ui/Landing'
+import RoomBar from './ui/RoomBar'
+import HitFeed, { type HitItem } from './ui/HitFeed'
 import {
   onRemoteCursor,
   onRemoteHit,
   remoteColorFor,
   sendCursor,
   sendHit,
+  useNetState,
 } from './net/session'
 import './App.css'
 
@@ -41,6 +44,8 @@ const DRUM_LABELS: Record<DrumId, string> = {
   hihat: 'Hi-hat',
 }
 
+let hitSeq = 0
+
 function describeError(err: unknown): string {
   if (err instanceof DOMException) {
     switch (err.name) {
@@ -59,12 +64,15 @@ function describeError(err: unknown): string {
 }
 
 export default function App() {
+  const net = useNetState()
+  const inRoom = Boolean(net.roomId)
   const [status, setStatus] = useState<Status>('idle')
   const [error, setError] = useState('')
   const [step, setStep] = useState('')
   const [handVisible, setHandVisible] = useState(false)
-  const [lastHit, setLastHit] = useState('')
   const [aspectRatio, setAspectRatio] = useState('16 / 9')
+  const [showDebug, setShowDebug] = useState(false)
+  const [hitFeed, setHitFeed] = useState<HitItem[]>([])
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const sceneRef = useRef<DrumSceneHandle | null>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
@@ -75,6 +83,11 @@ export default function App() {
     lastVelocity: 0,
   })
 
+  const addHit = (name: string, drum: DrumId) =>
+    setHitFeed((f) => [...f.slice(-3), { key: ++hitSeq, name, drum }])
+  const expireHit = (key: number) =>
+    setHitFeed((f) => f.filter((h) => h.key !== key))
+
   useEffect(() => () => cleanupRef.current?.(), [])
 
   useEffect(
@@ -83,6 +96,7 @@ export default function App() {
         void startAudio().catch(() => {})
         DRUM_TRIGGERS[hit.drum](hit.velocity)
         sceneRef.current?.flash(hit.drum)
+        addHit(hit.name, hit.drum)
       }),
     [],
   )
@@ -129,6 +143,12 @@ export default function App() {
     setHandVisible(false)
     setStatus('idle')
   }, [])
+
+  useEffect(() => {
+    if (inRoom) return
+    const id = window.setTimeout(stop, 0)
+    return () => window.clearTimeout(id)
+  }, [inRoom, stop])
 
   const start = async () => {
     const video = videoRef.current
@@ -246,7 +266,7 @@ export default function App() {
               DRUM_TRIGGERS[strike.id](strike.velocity)
               sceneRef.current?.flash(strike.id)
               sendHit(strike.id, strike.velocity)
-              setLastHit(DRUM_LABELS[strike.id])
+              addHit('You', strike.id)
               debugRef.current.lastHit = DRUM_LABELS[strike.id]
               debugRef.current.lastVelocity = vy
             }
@@ -278,60 +298,78 @@ export default function App() {
 
   return (
     <main className="app">
-      <header className="header">
-        <h1>RoomTone</h1>
-        <p>Virtual drum kit — strike downward through a pad</p>
-      </header>
+      {!inRoom ? (
+        <Landing />
+      ) : (
+        <div className="room-screen">
+          <RoomBar />
 
-      <div className="stage" style={{ aspectRatio }}>
-        <video ref={videoRef} playsInline muted autoPlay />
-        <DrumScene
-          ref={sceneRef}
-          onError={(message) => {
-            setError(message)
-            setStatus('error')
-          }}
-        />
+          <div className="stage" style={{ aspectRatio }}>
+            <video ref={videoRef} playsInline muted autoPlay />
+            <DrumScene
+              ref={sceneRef}
+              onError={(message) => {
+                setError(message)
+                setStatus('error')
+              }}
+            />
 
-        {status !== 'running' && (
-          <div className="stage-overlay">
-            {status === 'idle' && (
-              <button type="button" className="primary" onClick={start}>
-                Enable Camera
+            {status !== 'running' && (
+              <div className="stage-overlay">
+                {status === 'idle' && (
+                  <>
+                    <button type="button" className="primary" onClick={start}>
+                      Enable Camera
+                    </button>
+                    <p className="stage-hint">
+                      You can also just listen — remote hits still play.
+                    </p>
+                  </>
+                )}
+                {status === 'starting' && <p className="loading">{step}</p>}
+                {status === 'error' && (
+                  <>
+                    <p className="error">{error}</p>
+                    <button type="button" className="primary" onClick={start}>
+                      Try Again
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+
+            {status === 'running' && (
+              <div className={`hud ${handVisible ? 'on' : ''}`}>
+                <span className="hud-dot" />
+                {handVisible ? 'tracking fingertip' : 'show your hand'}
+              </div>
+            )}
+
+            <HitFeed items={hitFeed} onExpire={expireHit} />
+
+            {status === 'running' && showDebug && (
+              <DebugOverlay source={debugRef} />
+            )}
+          </div>
+
+          <div className="room-controls">
+            {status === 'running' && (
+              <button type="button" className="secondary" onClick={stop}>
+                Disable camera
               </button>
             )}
-            {status === 'starting' && <p className="loading">{step}</p>}
-            {status === 'error' && (
-              <>
-                <p className="error">{error}</p>
-                <button type="button" className="primary" onClick={start}>
-                  Try Again
-                </button>
-              </>
-            )}
+            <button
+              type="button"
+              className="debug-toggle"
+              onClick={() => setShowDebug((d) => !d)}
+            >
+              {showDebug ? 'hide debug' : 'debug'}
+            </button>
           </div>
-        )}
 
-        {status === 'running' && (
-          <div className={`hud ${handVisible ? 'on' : ''}`}>
-            <span className="hud-dot" />
-            {handVisible ? 'tracking fingertip' : 'show your hand'}
-            {lastHit && <span className="hud-last">last: {lastHit}</span>}
-          </div>
-        )}
-
-        {status === 'running' && <DebugOverlay source={debugRef} />}
-      </div>
-
-      {status === 'running' && (
-        <button type="button" className="secondary" onClick={stop}>
-          Disable camera
-        </button>
+          {showDebug && <DrumTestPanel />}
+        </div>
       )}
-
-      <DrumTestPanel />
-
-      <RoomPanel />
     </main>
   )
 }
