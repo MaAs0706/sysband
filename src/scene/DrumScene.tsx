@@ -89,6 +89,10 @@ const DrumScene = forwardRef<DrumSceneHandle, DrumSceneProps>(
       }
 
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+      renderer.toneMapping = THREE.ACESFilmicToneMapping
+      renderer.toneMappingExposure = 1.12
+      renderer.shadowMap.enabled = true
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap
       renderer.autoClear = false
       mount.appendChild(renderer.domElement)
 

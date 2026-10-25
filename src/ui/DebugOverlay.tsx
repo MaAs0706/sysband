@@ -9,8 +9,10 @@ export interface DebugStats {
 
 export default function DebugOverlay({
   source,
+  cameraStatus,
 }: {
   source: RefObject<DebugStats>
+  cameraStatus?: string
 }) {
   const [, setTick] = useState(0)
 
@@ -21,7 +23,9 @@ export default function DebugOverlay({
 
   const stats = source.current
   return (
-    <div className="debug">
+    <div className="debug" role="status" aria-label="Developer telemetry">
+      <span className="debug-tag">DEV TELEMETRY</span>
+      <span>cam {cameraStatus ?? 'idle'}</span>
       <span>fps {Math.round(stats.fps)}</span>
       <span>hands {stats.hands}</span>
       <span>last {stats.lastHit || '—'}</span>

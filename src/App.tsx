@@ -76,7 +76,6 @@ export default function App() {
   const [error, setError] = useState('')
   const [step, setStep] = useState('')
   const [handVisible, setHandVisible] = useState(false)
-  const [aspectRatio, setAspectRatio] = useState('16 / 9')
   const [showDebug, setShowDebug] = useState(false)
   const [hitFeed, setHitFeed] = useState<HitItem[]>([])
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -113,7 +112,11 @@ export default function App() {
         void startAudio().catch(() => {})
         triggerInstrument(ev.instrument, ev.target, ev.velocity)
         sceneRef.current?.flashNote(ev.instrument, ev.target, ev.playerId)
-        addHit(ev.name, ev.instrument, formatTargetLabel(ev.instrument, ev.target))
+        addHit(
+          ev.name,
+          ev.instrument,
+          formatTargetLabel(ev.instrument, ev.target),
+        )
       }),
     [addHit],
   )
@@ -215,7 +218,6 @@ export default function App() {
       if (disposed) return
 
       const aspect = video.videoWidth / video.videoHeight
-      setAspectRatio(`${video.videoWidth} / ${video.videoHeight}`)
 
       stream.getTracks().forEach((track) =>
         track.addEventListener('ended', stop),
@@ -357,16 +359,12 @@ export default function App() {
         <Landing />
       ) : (
         <div className="room-screen">
-          <RoomBar />
+          <RoomBar
+            showDebug={showDebug}
+            onToggleDebug={() => setShowDebug((d) => !d)}
+          />
 
-          <div className="stage" style={{ aspectRatio }}>
-            <video
-              ref={videoRef}
-              className={status === 'running' ? 'pip' : 'pip hidden'}
-              playsInline
-              muted
-              autoPlay
-            />
+          <div className="stage">
             <DrumScene
               ref={sceneRef}
               players={net.players}
@@ -378,20 +376,48 @@ export default function App() {
               }}
             />
 
+            <div className={`pip-dock ${status === 'running' ? 'active' : ''}`}>
+              <video
+                ref={videoRef}
+                className="pip"
+                playsInline
+                muted
+                autoPlay
+              />
+              {status === 'running' && (
+                <button
+                  type="button"
+                  className="pip-stop"
+                  onClick={stop}
+                  title="Stop webcam hand tracking"
+                >
+                  Stop Camera
+                </button>
+              )}
+            </div>
+
             {status === 'idle' && (
               <div className="cam-cta">
+                <div className="cam-cta-info">
+                  <span className="cam-cta-title">Hand-Gesture Tracking</span>
+                  <span className="cam-cta-sub">
+                    Play your {net.instrument} station in the air with your
+                    webcam
+                  </span>
+                </div>
                 <button type="button" className="primary" onClick={start}>
-                  Enable Camera to Play
+                  Enable Camera
                 </button>
               </div>
             )}
             {status === 'starting' && (
               <div className="cam-cta">
+                <span className="cam-spinner" />
                 <p className="loading">{step}</p>
               </div>
             )}
             {status === 'error' && (
-              <div className="cam-cta">
+              <div className="cam-cta cam-cta-error">
                 <p className="error">{error}</p>
                 <button type="button" className="primary" onClick={start}>
                   Try Again
@@ -403,15 +429,15 @@ export default function App() {
               <div className={`hud ${handVisible ? 'on' : ''}`}>
                 <span className="hud-dot" />
                 {handVisible
-                  ? `tracking · ${net.instrument}`
-                  : 'show your hand'}
+                  ? `Tracking · ${net.instrument}`
+                  : 'Raise your hand into frame'}
               </div>
             )}
 
             <HitFeed items={hitFeed} onExpire={expireHit} />
 
-            {status === 'running' && showDebug && (
-              <DebugOverlay source={debugRef} />
+            {showDebug && (
+              <DebugOverlay source={debugRef} cameraStatus={status} />
             )}
           </div>
 
@@ -421,21 +447,6 @@ export default function App() {
               addHit('You', inst, label)
             }}
           />
-
-          <div className="room-controls">
-            {status === 'running' && (
-              <button type="button" className="secondary" onClick={stop}>
-                Disable camera
-              </button>
-            )}
-            <button
-              type="button"
-              className="debug-toggle"
-              onClick={() => setShowDebug((d) => !d)}
-            >
-              {showDebug ? 'hide debug' : 'debug'}
-            </button>
-          </div>
         </div>
       )}
     </main>

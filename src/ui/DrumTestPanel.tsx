@@ -6,21 +6,47 @@ import {
   triggerInstrument,
   type InstrumentId,
 } from '../audio/instruments'
-import { sendNote, useNetState } from '../net/session'
+import { selectInstrument, sendNote, useNetState } from '../net/session'
+
+const DOCK_STATIONS: {
+  id: InstrumentId
+  label: string
+  hint: string
+  cls: string
+}[] = [
+  {
+    id: 'drums',
+    label: 'Drums',
+    hint: 'Strike downward into Snare, Kick or Hi-hat rings',
+    cls: 'dock-drums',
+  },
+  {
+    id: 'piano',
+    label: 'Grand Piano',
+    hint: 'Strike downward into the C4–C5 keybed',
+    cls: 'dock-piano',
+  },
+  {
+    id: 'guitar',
+    label: 'Electric Guitar',
+    hint: 'Sweep vertically across the 6 strings',
+    cls: 'dock-guitar',
+  },
+]
 
 const DRUM_BUTTONS = [
-  { id: 'kick', label: 'Kick' },
-  { id: 'snare', label: 'Snare' },
-  { id: 'hihat', label: 'Hi-hat' },
+  { id: 'snare', label: 'Snare', sub: 'Left ring' },
+  { id: 'kick', label: 'Kick', sub: 'Center ring' },
+  { id: 'hihat', label: 'Hi-hat', sub: 'Right ring' },
 ] as const
 
 const GUITAR_BUTTONS = [
-  { id: 'E2', label: 'E2' },
-  { id: 'A2', label: 'A2' },
-  { id: 'D3', label: 'D3' },
-  { id: 'G3', label: 'G3' },
-  { id: 'B3', label: 'B3' },
-  { id: 'E4', label: 'E4' },
+  { id: 'E2', label: 'E2', sub: '6th' },
+  { id: 'A2', label: 'A2', sub: '5th' },
+  { id: 'D3', label: 'D3', sub: '4th' },
+  { id: 'G3', label: 'G3', sub: '3rd' },
+  { id: 'B3', label: 'B3', sub: '2nd' },
+  { id: 'E4', label: 'E4', sub: '1st' },
 ] as const
 
 export default function DrumTestPanel({
@@ -57,51 +83,82 @@ export default function DrumTestPanel({
     }
   }
 
+  const activeMeta =
+    DOCK_STATIONS.find((s) => s.id === net.instrument) ?? DOCK_STATIONS[0]
+
   return (
-    <section className="drum-panel">
-      <h2>
-        {net.instrument === 'piano'
-          ? 'Piano keyboard (C4–C5)'
-          : net.instrument === 'guitar'
-            ? 'Guitar strings (E2–E4)'
-            : 'Drum pads'}
-      </h2>
-      <div className="pads">
-        {net.instrument === 'drums' &&
-          DRUM_BUTTONS.map((pad) => (
+    <section className={`instrument-dock dock-active-${net.instrument}`}>
+      <div className="dock-station-selector" role="group" aria-label="Instrument station">
+        <span className="dock-section-tag">STATION</span>
+        <div className="inst-tabs">
+          {DOCK_STATIONS.map((st) => (
             <button
-              key={pad.id}
+              key={st.id}
               type="button"
-              className={`pad ${pressed === `drums:${pad.id}` ? 'pressed' : ''}`}
-              onClick={() => hit('drums', pad.id, pad.label)}
+              className={`inst-tab ${st.cls} ${net.instrument === st.id ? 'active' : ''}`}
+              onClick={() => selectInstrument(st.id)}
             >
-              {pad.label}
+              <span className="tab-indicator" />
+              {st.label}
             </button>
           ))}
-        {net.instrument === 'piano' &&
-          PIANO_NOTES.map((note) => (
-            <button
-              key={note}
-              type="button"
-              className={`pad pad-key ${pressed === `piano:${note}` ? 'pressed' : ''}`}
-              onClick={() => hit('piano', note, `Piano ${note}`)}
-            >
-              {note}
-            </button>
-          ))}
-        {net.instrument === 'guitar' &&
-          GUITAR_BUTTONS.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              className={`pad ${pressed === `guitar:${s.id}` ? 'pressed' : ''}`}
-              onClick={() => hit('guitar', s.id, `Guitar ${s.label}`)}
-            >
-              {s.label}
-            </button>
-          ))}
+        </div>
       </div>
-      {error && <p className="error">{error}</p>}
+
+      <div className="dock-divider" />
+
+      <div className="dock-triggers">
+        <div className="dock-triggers-head">
+          <span className="dock-section-tag">
+            {net.instrument === 'piano'
+              ? 'KEYBED · C4–C5'
+              : net.instrument === 'guitar'
+                ? 'STRINGS · E2–E4'
+                : 'DRUM KIT'}
+          </span>
+          <span className="dock-gesture-hint">{activeMeta.hint}</span>
+        </div>
+
+        <div className="pads">
+          {net.instrument === 'drums' &&
+            DRUM_BUTTONS.map((pad) => (
+              <button
+                key={pad.id}
+                type="button"
+                className={`pad pad-drums ${pressed === `drums:${pad.id}` ? 'pressed' : ''}`}
+                onClick={() => hit('drums', pad.id, pad.label)}
+              >
+                <span className="pad-main">{pad.label}</span>
+                <span className="pad-sub">{pad.sub}</span>
+              </button>
+            ))}
+          {net.instrument === 'piano' &&
+            PIANO_NOTES.map((note) => (
+              <button
+                key={note}
+                type="button"
+                className={`pad pad-key pad-piano ${pressed === `piano:${note}` ? 'pressed' : ''}`}
+                onClick={() => hit('piano', note, `Piano ${note}`)}
+              >
+                <span className="pad-main">{note}</span>
+              </button>
+            ))}
+          {net.instrument === 'guitar' &&
+            GUITAR_BUTTONS.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                className={`pad pad-guitar ${pressed === `guitar:${s.id}` ? 'pressed' : ''}`}
+                onClick={() => hit('guitar', s.id, `Guitar ${s.label}`)}
+              >
+                <span className="pad-main">{s.label}</span>
+                <span className="pad-sub">{s.sub}</span>
+              </button>
+            ))}
+        </div>
+      </div>
+
+      {error && <p className="error dock-error">{error}</p>}
     </section>
   )
 }
