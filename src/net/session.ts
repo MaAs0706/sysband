@@ -82,7 +82,6 @@ const noteListeners = new Set<(note: RemoteNote) => void>()
 const cursorListeners = new Set<(cursor: RemoteCursor) => void>()
 const seenHits = new Set<string>()
 
-let socket: Socket | null = null
 let desiredRoom: string | null = null
 
 function isValidTarget(inst: InstrumentId, target: string): boolean {
@@ -99,19 +98,8 @@ function dedupe(key: string): boolean {
   return true
 }
 
-function ensureSocket(): Socket {
-  if (socket) return socket
-  socket = io()
-
-  socket.on('connect', () => {
-    set({ conn: 'connected' })
-    if (desiredRoom) void doJoin(desiredRoom, state.instrument)
-  })
-  socket.on('disconnect', () => set({ conn: 'disconnected' }))
-  socket.io.on('reconnect_attempt', () => set({ conn: 'reconnecting' }))
-  socket.io.on('reconnect_failed', () => set({ conn: 'disconnected' }))
-
-  socket.on('room-state', (payload: unknown) => {
+function handleServerEvent(event: string, payload: unknown) {
+  if (event === 'room-state') {
     const p = payload as { roomId?: string; players?: PlayerInfo[] }
     if (typeof p?.roomId === 'string' && Array.isArray(p.players)) {
       const normalized = p.players.map((pl) => ({
@@ -123,9 +111,7 @@ function ensureSocket(): Socket {
         normalized.find((pl) => pl.id === state.you?.id) ?? state.you
       set({ roomId: p.roomId, players: normalized, you: updatedYou })
     }
-  })
-
-  socket.on('drum-hit', (payload: unknown) => {
+  } else if (event === 'drum-hit') {
     const p = payload as Partial<RemoteHit>
     if (!DRUM_IDS.includes(String(p.drum))) return
     const velocity = Number(p.velocity)
@@ -150,9 +136,7 @@ function ensureSocket(): Socket {
         ts: hit.ts,
       }),
     )
-  })
-
-  socket.on('remote-note', (payload: unknown) => {
+  } else if (event === 'remote-note') {
     const p = payload as Partial<RemoteNote>
     const inst = p.instrument as InstrumentId
     if (!inst || typeof p.target !== 'string') return
@@ -170,9 +154,7 @@ function ensureSocket(): Socket {
       ts: Number(p.ts) || 0,
     }
     noteListeners.forEach((cb) => cb(ev))
-  })
-
-  socket.on('remote-cursor', (payload: unknown) => {
+  } else if (event === 'remote-cursor') {
     const p = payload as Partial<RemoteCursor>
     if (typeof p?.playerId !== 'string' || !Array.isArray(p.hands)) return
     const hands = p.hands
@@ -187,27 +169,156 @@ function ensureSocket(): Socket {
         ts: Number(p.ts) || 0,
       }),
     )
-  })
+  }
+}
 
-  return socket
+interface Transport {
+  isConnected(): boolean
+  connect(): Promise<void>
+  emit(event: string, data?: unknown): void
+  emitWithAck(event: string, data?: unknown): Promise<unknown>
+}
+
+let transport: Transport | null = null
+
+function shouldUseNativeWs(): boolean {
+  if (typeof window === 'undefined') return false
+  const h = window.location.hostname
+  return h.endsWith('.workers.dev') || h.endsWith('.pages.dev')
+}
+
+function createWsTransport(): Transport {
+  let ws: WebSocket | null = null
+  let ackSeq = 0
+  const pendingAcks = new Map<
+    number,
+    { resolve: (v: unknown) => void; timer: number }
+  >()
+
+  const openSocket = (): Promise<void> =>
+    new Promise((resolve, reject) => {
+      if (ws && ws.readyState === WebSocket.OPEN) return resolve()
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const next = new WebSocket(`${proto}//${window.location.host}/ws`)
+      ws = next
+      let settled = false
+
+      next.addEventListener('open', () => {
+        settled = true
+        set({ conn: 'connected' })
+        resolve()
+      })
+      next.addEventListener('message', (ev) => {
+        try {
+          const msg = JSON.parse(String(ev.data)) as {
+            event?: string
+            ackId?: number
+            data?: unknown
+          }
+          if (msg.event === 'ack' && msg.ackId !== undefined) {
+            const p = pendingAcks.get(msg.ackId)
+            if (p) {
+              window.clearTimeout(p.timer)
+              pendingAcks.delete(msg.ackId)
+              p.resolve(msg.data)
+            }
+          } else if (msg.event) {
+            handleServerEvent(msg.event, msg.data)
+          }
+        } catch {
+          // ignore malformed frame
+        }
+      })
+      next.addEventListener('close', () => {
+        set({ conn: 'disconnected' })
+        if (!settled) reject(new Error('unreachable'))
+        else if (desiredRoom) {
+          set({ conn: 'reconnecting' })
+          window.setTimeout(() => {
+            if (desiredRoom) void doJoin(desiredRoom, state.instrument)
+          }, 1500)
+        }
+      })
+      next.addEventListener('error', () => {
+        if (!settled) reject(new Error('unreachable'))
+      })
+    })
+
+  return {
+    isConnected: () => Boolean(ws && ws.readyState === WebSocket.OPEN),
+    connect: openSocket,
+    emit(event, data) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ event, data }))
+      }
+    },
+    emitWithAck(event, data) {
+      return new Promise((resolve, reject) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          return reject(new Error('not connected'))
+        }
+        const ackId = ++ackSeq
+        const timer = window.setTimeout(() => {
+          pendingAcks.delete(ackId)
+          reject(new Error('timeout'))
+        }, 5000)
+        pendingAcks.set(ackId, { resolve, timer })
+        ws.send(JSON.stringify({ event, data, ackId }))
+      })
+    },
+  }
+}
+
+function createSocketIoTransport(): Transport {
+  const s: Socket = io()
+
+  s.on('connect', () => {
+    set({ conn: 'connected' })
+    if (desiredRoom) void doJoin(desiredRoom, state.instrument)
+  })
+  s.on('disconnect', () => set({ conn: 'disconnected' }))
+  s.io.on('reconnect_attempt', () => set({ conn: 'reconnecting' }))
+  s.io.on('reconnect_failed', () => set({ conn: 'disconnected' }))
+
+  for (const ev of ['room-state', 'drum-hit', 'remote-note', 'remote-cursor']) {
+    s.on(ev, (payload: unknown) => handleServerEvent(ev, payload))
+  }
+
+  return {
+    isConnected: () => s.connected,
+    connect: () =>
+      new Promise<void>((resolve, reject) => {
+        if (s.connected) return resolve()
+        s.once('connect', () => resolve())
+        s.once('connect_error', () => reject(new Error('unreachable')))
+        s.connect()
+      }),
+    emit: (event, data) => {
+      s.emit(event, data)
+    },
+    emitWithAck: (event, data) => s.timeout(5000).emitWithAck(event, data),
+  }
+}
+
+function ensureTransport(): Transport {
+  if (!transport) {
+    transport = shouldUseNativeWs()
+      ? createWsTransport()
+      : createSocketIoTransport()
+  }
+  return transport
 }
 
 async function doJoin(
   roomId?: string,
   instrument: InstrumentId = state.instrument,
 ): Promise<{ ok: boolean; error?: string }> {
-  const s = ensureSocket()
+  const t = ensureTransport()
   try {
-    if (!s.connected) {
-      await new Promise<void>((resolve, reject) => {
-        s.once('connect', () => resolve())
-        s.once('connect_error', () => reject(new Error('unreachable')))
-        s.connect()
-      })
+    if (!t.isConnected()) {
+      await t.connect()
     }
-    const res = (await s
-      .timeout(5000)
-      .emitWithAck('join', { roomId, instrument })) as {
+    const res = (await t.emitWithAck('join', { roomId, instrument })) as {
       ok: boolean
       error?: string
       you?: PlayerInfo
@@ -252,14 +363,14 @@ export function selectInstrument(instrument: InstrumentId): void {
       p.id === state.you?.id ? { ...p, instrument } : p,
     ),
   })
-  if (socket?.connected && state.roomId) {
-    socket.emit('select-instrument', { instrument })
+  if (transport?.isConnected() && state.roomId) {
+    transport.emit('select-instrument', { instrument })
   }
 }
 
 export function leaveRoom(): void {
   desiredRoom = null
-  socket?.emit('leave')
+  transport?.emit('leave')
   set({ roomId: null, you: null, players: [] })
 }
 
@@ -272,10 +383,10 @@ export function sendNote(
   target: string,
   velocity: number,
 ): void {
-  if (!socket?.connected || !state.roomId || !state.you) return
+  if (!transport?.isConnected() || !state.roomId || !state.you) return
   const ts = Date.now()
   if (instrument === 'drums') {
-    socket.emit('hit', {
+    transport.emit('hit', {
       roomId: state.roomId,
       playerId: state.you.id,
       drum: target,
@@ -283,7 +394,7 @@ export function sendNote(
       ts,
     })
   } else {
-    socket.emit('note', {
+    transport.emit('note', {
       roomId: state.roomId,
       playerId: state.you.id,
       instrument,
@@ -311,11 +422,11 @@ export function onRemoteNote(cb: (note: RemoteNote) => void): () => void {
 let lastCursorSent = 0
 
 export function sendCursor(hands: { x: number; y: number }[]): void {
-  if (!socket?.connected || !state.roomId || !state.you) return
+  if (!transport?.isConnected() || !state.roomId || !state.you) return
   const now = Date.now()
   if (now - lastCursorSent < 50) return
   lastCursorSent = now
-  socket.emit('cursor', {
+  transport.emit('cursor', {
     roomId: state.roomId,
     playerId: state.you.id,
     hands,

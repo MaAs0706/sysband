@@ -1,0 +1,23 @@
+{
+  "name": "roomtone",
+  "main": "worker/index.js",
+  "compatibility_date": "2025-04-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ROOM_HUB",
+        "class_name": "RoomHub"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["RoomHub"]
+    }
+  ]
+}

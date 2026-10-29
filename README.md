@@ -1,74 +1,78 @@
 # RoomTone
 
-Multiplayer virtual drum room — webcam-tracked fingertip strikes play
-synthesized drums, relayed over Socket.IO rooms so everyone hears and
-sees each hit.
+A shared 3D virtual music studio where people play **Acoustic Drums**, **Grand Piano**, and **Electric Guitar** together in real time using webcam hand gestures.
 
-## Requirements
+**Live Production App:** [https://roomtone.aswanthmadhav-roomtone.workers.dev](https://roomtone.aswanthmadhav-roomtone.workers.dev)
 
-- Node.js 20+, a Chromium-based or Safari browser
-- A webcam (tracking runs fully in-browser via MediaPipe — video never
-  leaves your device; only fingertip x/y and drum events are shared)
-- Serve over `localhost` or HTTPS — `getUserMedia` requires a secure
-  context
+---
 
-## Setup & run
+## Features
+
+- **3D Recording Studio (Three.js)**: Architectural hardwood floor, woven studio rug, acoustic timber-slat wall panels, backlit control-room observation window with mixing desk & VU meters, ACES filmic tone mapping, soft shadows, and overhead moving-head spotlights with feathered volumetric shafts and audio-reactive floor pools.
+- **Three Distinct Instrument Stations**:
+  - **Acoustic Drums (Left)**: Bass drum, snare, rack & floor toms, hi-hat & crash cymbals (`MembraneSynth`, `NoiseSynth`, `MetalSynth`).
+  - **Grand Piano (Center)**: 88-key studio cabinet with individually animated playable keys across the `C4–C5` octave (`PolySynth`).
+  - **Electric Guitar (Right)**: Double-cutaway electric guitar with 4×12 speaker cabinet & tube amp head across 6 strings with low (`E2–E4`) and high (`A3–E5`) voicings.
+- **Webcam Hand-Gesture Tracking (MediaPipe)**: Tracks up to two index fingertips locally in the browser (`VIDEO` mode). Camera video never leaves your device; only note events and normalized cursor coordinates are shared.
+- **Real-Time Multiplayer Rooms**: 4-character room codes, live instrument switching, co-occupied stations (up to 2 musicians per station), colored remote fingertip orbs, and attributed live hit feed.
+
+---
+
+## Run Locally
 
 ```bash
 npm install
 
-# terminal 1 — room relay server on :3001
+# Terminal 1 — Socket.IO room server on :3001
 npm run server
 
-# terminal 2 — Vite dev client on :5173
+# Terminal 2 — Vite dev client on :5173 (also exposed on your LAN IP)
 npm run dev
 ```
 
-Open `http://localhost:5173` in two windows/devices to test multiplayer.
+Open `http://localhost:5173` in two browser windows to test locally.
 
-### Playing over LAN
+### Playing Across Devices
 
-Run the client exposed to the network: `npm run dev -- --host`, then
-others open `http://<your-ip>:5173`. The Vite proxy forwards
-`/socket.io` to the server on the same machine, so nothing else is
-needed. Note: non-localhost camera access requires HTTPS in most
-browsers — LAN may work in Chrome for local addresses, otherwise it's
-localhost-only.
+1. **Use the deployed Cloudflare URL (Recommended — HTTPS included for webcam access):**  
+   Open **`https://roomtone.aswanthmadhav-roomtone.workers.dev`** on any laptop, desktop, or phone, create a room, and share the 4-letter room code.
+2. **Or tunnel your local dev server over HTTPS:**
+   ```bash
+   npm run share
+   ```
+   Opens an instant `https://*.lhr.life` tunnel to your local `:5173` server so other devices can use webcam tracking against your local build.
 
-## Controls
+---
 
-- **Enable Camera** → allow permission → flick an index fingertip
-  downward through a glowing ring (snare left, kick center, hi-hat right)
-- Hovering inside a pad is silent; a hit needs downward motion
-- Both hands work; each gets its own orb (white/violet local, colored
-  remote players)
-- **debug** toggle under the stage reveals the manual drum-test pads and
-  the fps/hands/velocity overlay
+## Deploy to Cloudflare Workers
+
+RoomTone deploys as a single Cloudflare Worker serving static assets (`./dist`) plus a `RoomHub` Durable Object (`worker/index.js`) handling WebSocket room state at `/ws`:
+
+```bash
+npm run deploy
+```
+
+---
 
 ## Scripts
 
 | Command | Purpose |
 |---|---|
-| `npm run dev` | Vite dev client |
-| `npm run server` | Socket.IO room server (tsx watch, :3001) |
-| `npm run build` | typecheck + production build |
-| `npm run lint` | oxlint |
-| `npm run typecheck:server` | tsc over `server/` |
-| `npm run test:server` | integration test: relay, isolation, validation, GC |
+| `npm run dev` | Start Vite dev server (`localhost:5173` + LAN IP) |
+| `npm run server` | Start local Express + Socket.IO room server (`:3001`) |
+| `npm run share` | Open an HTTPS tunnel (`localhost.run`) to `:5173` for multi-device testing |
+| `npm run deploy` | Build client and deploy to Cloudflare Workers (`wrangler deploy`) |
+| `npm run build` | TypeScript check (`tsc -b`) + production Vite bundle |
+| `npm run lint` | Run `oxlint` |
+| `npm run typecheck:server` | Typecheck `server/index.ts` |
+| `npm run test:server` | Run 21-assertion multiplayer & validation smoke test suite |
 
-## Tuning
+---
 
-- `STRIKE` in `src/scene/hitZones.ts` — `strikeVelocity` (flick inside a
-  pad), `entryVelocity` (crossing into a pad), `cooldownMs`, `minGain`
-- `FINGER_SMOOTHING` in `src/App.tsx` — fingertip EMA (higher = smoother,
-  laggier)
+## Controls & Tuning
 
-## Known limitations
-
-- Rooms are in-memory; a server restart wipes them. No persistence,
-  auth, or stable identity — reconnecting players rejoin as a new
-  `Player-N`.
-- Designed for localhost/LAN demos; production deployment (TLS, scaling,
-  TURN-free since no video is relayed) is out of scope.
-- Remote hand positions are shared presence data (~20 Hz of 2–4 floats);
-  no video or full landmark data ever leaves the device.
+- **Drums**: Flick your index fingertip downward through the **Snare** (left), **Kick** (center), or **Hi-hat** (right) rings.
+- **Grand Piano**: Strike downward into any of the 8 key zones (`C4`–`C5`) along the lower stage.
+- **Electric Guitar**: Sweep your fingertip vertically across the 6 horizontal strings (left half plays low voicing `E2–E4`, right half plays high voicing `A3–E5`).
+- **Bottom Instrument Dock**: Switch instruments live at any time or click/tap the pads, keys, and strings directly.
+- **Telemetry**: Click **Telemetry** in the top studio bar to view live FPS, tracked hand count, last note, and strike velocity.

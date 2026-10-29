@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "server": "tsx watch server/index.ts",
+    "share": "ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R 80:localhost:5173 nokey@localhost.run",
+    "deploy": "npm run build && npx wrangler deploy",
     "typecheck:server": "tsc -p server/tsconfig.json",
     "test:server": "node server/smoke.test.mjs",
     "build": "tsc -b && vite build",
